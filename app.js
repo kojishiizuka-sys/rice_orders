@@ -67,8 +67,12 @@
   }
 
   let syncing = false, again = false;
-  async function sync() {
-    if (!cfg.apiUrl || !cfg.key || !cfg.user) { openCfg(); return; }
+  async function sync(manual) {
+    if (!cfg.apiUrl || !cfg.key || !cfg.user) {
+      openCfg();
+      if (manual) toast('名前・合言葉・サーバーのURLをすべて入れてください');
+      return;
+    }
     if (syncing) { again = true; return; }
     syncing = true; setStatus('sync');
     const sent = queue.slice();
@@ -90,6 +94,7 @@
       retry = again;
     } catch (e) {
       setStatus('off');
+      if (manual) toast('サーバーにつながりません。URLが「…/exec」で終わっているか、デプロイのアクセス権が「全員」か確認してください');
     } finally {
       syncing = false; again = false;
       render();
@@ -343,12 +348,18 @@
   }
   $('#cfgForm').addEventListener('submit', (e) => {
     e.preventDefault();
+    const url = $('#cUrl').value.trim() || base.apiUrl || '';
+    if (!/^https?:\/\/\S+$/.test(url)) {
+      toast('サーバーのURLを入れてください（https://script.google.com/…/exec）');
+      $('#cUrl').focus();
+      return;
+    }
     cfg.user = $('#cUser').value.trim();
     cfg.key = $('#cKey').value.trim();
-    cfg.apiUrl = $('#cUrl').value.trim() || base.apiUrl || '';
+    cfg.apiUrl = url;
     store.set('cfg', cfg);
     $('#cfgDlg').close();
-    sync();
+    sync(true);
   });
   $('#cClose').addEventListener('click', () => $('#cfgDlg').close());
   $('#cfgBtn').addEventListener('click', openCfg);
@@ -389,7 +400,7 @@
     queueOp({ t: 'update', id: editing.id, changes: { status: '未対応', cancelReason: '' }, user: cfg.user });
     closeForm(); render(); sync();
   });
-  $('#syncBtn').addEventListener('click', sync);
+  $('#syncBtn').addEventListener('click', () => sync(true));
 
   let toastTimer;
   function toast(msg) {
@@ -403,7 +414,7 @@
   }
 
   // ------------------------------------------------------------ 起動
-  window.addEventListener('online', sync);
+  window.addEventListener('online', () => sync());
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { if (viewDate < today() && !F.dlg.open) { /* 日付は手動で戻す */ } sync(); } });
   setInterval(() => { if (!document.hidden) sync(); }, 20000);
 
