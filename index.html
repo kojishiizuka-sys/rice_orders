@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>受注表</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#2f6b47">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="受注表">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="bar">
+  <h1>受注表</h1>
+  <button id="syncBtn" class="sync" type="button" aria-label="今すぐ同期">…</button>
+  <button id="cfgBtn" class="icon" type="button" aria-label="設定">⚙</button>
+</header>
+
+<nav class="tabs">
+  <button type="button" data-tab="list" class="on">一覧</button>
+  <button type="button" data-tab="invoice">伝票待ち <span id="invCount" class="badge" hidden></span></button>
+</nav>
+
+<main>
+  <section id="viewList">
+    <div class="datenav">
+      <button type="button" id="prevDay" aria-label="前の日">‹</button>
+      <label class="datepick"><span id="dateLabel"></span><input type="date" id="dateInput"></label>
+      <button type="button" id="nextDay" aria-label="次の日">›</button>
+      <button type="button" id="todayBtn" class="small">今日</button>
+    </div>
+    <div class="filters">
+      <label class="chip"><input type="checkbox" id="fltOpen"> 未完了のみ</label>
+      <label class="chip"><input type="checkbox" id="fltVoid"> 取消も表示</label>
+    </div>
+    <p id="summary" class="summary"></p>
+    <div id="list" class="cards"></div>
+  </section>
+
+  <section id="viewInvoice" hidden>
+    <div class="filters">
+      <label class="chip"><input type="checkbox" id="fltDoneOnly"> 完了したものだけ</label>
+    </div>
+    <p id="invSummary" class="summary"></p>
+    <div id="invList" class="cards"></div>
+  </section>
+</main>
+
+<button id="fab" type="button">＋ 新規</button>
+
+<dialog id="formDlg">
+  <form id="form" autocomplete="off">
+    <h2 id="formTitle">新規注文</h2>
+
+    <div class="field">
+      <span class="lab">日付</span>
+      <div class="row">
+        <input type="date" id="fDate" required>
+        <button type="button" class="small" data-day="0">今日</button>
+        <button type="button" class="small" data-day="1">明日</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="lab" for="fName">お名前</label>
+      <input id="fName" enterkeyhint="next" autocapitalize="off">
+      <div class="chips" id="sgName"></div>
+    </div>
+
+    <div class="field">
+      <label class="lab" for="fBrand">銘柄</label>
+      <input id="fBrand" enterkeyhint="next">
+      <div class="chips" id="sgBrand"></div>
+    </div>
+
+    <div class="field">
+      <label class="lab" for="fQty">数量</label>
+      <input id="fQty" enterkeyhint="next">
+    </div>
+
+    <div class="field">
+      <label class="lab" for="fArea">地域</label>
+      <input id="fArea" enterkeyhint="next">
+      <div class="chips" id="sgArea"></div>
+    </div>
+
+    <div class="field">
+      <label class="lab" for="fTime">時間</label>
+      <input id="fTime" enterkeyhint="done">
+      <div class="chips" id="sgTime">
+        <button type="button">午前</button><button type="button">午後</button><button type="button">夕方まで</button><button type="button">指定なし</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <span class="lab">区分</span>
+      <div class="seg">
+        <label><input type="radio" name="fKind" value="配達" checked><span>配達</span></label>
+        <label><input type="radio" name="fKind" value="店頭"><span>店頭</span></label>
+      </div>
+    </div>
+
+    <label class="check"><input type="checkbox" id="fPaid"> 入金済み（代済）</label>
+
+    <div class="field">
+      <label class="lab" for="fNote">備考（新規のお客様は住所もここ）</label>
+      <textarea id="fNote" rows="2"></textarea>
+    </div>
+
+    <div id="editOnly" class="editonly" hidden>
+      <div id="voidBox" class="row">
+        <select id="fReason"><option>重複入力</option><option>お客様都合</option><option>内容の誤り</option></select>
+        <button type="button" id="fVoid" class="danger">取消にする</button>
+      </div>
+      <div id="restoreBox" class="row" hidden>
+        <span id="voidInfo"></span>
+        <button type="button" id="fRestore">取消を戻す</button>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button type="button" id="fClose">閉じる</button>
+      <button type="submit" id="fSave" class="primary">保存</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="cfgDlg">
+  <form id="cfgForm" autocomplete="off">
+    <h2>設定</h2>
+    <div class="field">
+      <label class="lab" for="cUser">あなたの名前（受付者として記録）</label>
+      <input id="cUser" required>
+    </div>
+    <div class="field">
+      <label class="lab" for="cKey">合言葉</label>
+      <input id="cKey" type="password" required>
+    </div>
+    <div class="field">
+      <label class="lab" for="cUrl">サーバーのURL</label>
+      <input id="cUrl" inputmode="url" placeholder="https://script.google.com/macros/s/…/exec">
+    </div>
+    <div class="actions">
+      <button type="button" id="cClose">閉じる</button>
+      <button type="submit" class="primary">保存して同期</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
