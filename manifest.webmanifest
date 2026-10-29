@@ -1,7 +1,7 @@
 {
   "name": "受注表",
   "short_name": "受注表",
-  "id": "kome-orders-app",
+  "id": "kome-orders-app-v2",
   "description": "お米屋さんの注文メモ共有アプリ",
   "lang": "ja",
   "start_url": "./",
