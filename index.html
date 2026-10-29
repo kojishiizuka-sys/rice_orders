@@ -56,6 +56,12 @@
   <form id="form" autocomplete="off">
     <h2 id="formTitle">新規注文</h2>
 
+    <div class="field memo" id="memoBox">
+      <label class="lab" for="fMemo">まとめて話す（キーボードのマイクで）</label>
+      <textarea id="fMemo" rows="2" placeholder="例：山田さん、コシヒカリ20kg、15時まで"></textarea>
+      <div class="row"><button type="button" id="fParse" class="small">振り分ける</button><span class="hint">話し終えると自動で下の欄に入ります。確認して保存してください</span></div>
+    </div>
+
     <div class="field">
       <span class="lab">日付</span>
       <div class="row">
@@ -154,6 +160,7 @@
 <div id="toast" role="status" aria-live="polite"></div>
 
 <script src="config.js"></script>
+<script src="parse.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

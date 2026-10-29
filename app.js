@@ -30,6 +30,7 @@
   let viewDate = today();
   let lastSync = 0;
   let status = 'idle'; // idle | sync | ok | off
+  let dragState = null, pendingRender = false;
 
   const persist = () => { store.set('rows', rows); store.set('queue', queue); store.set('suggest', suggest); };
 
@@ -114,8 +115,12 @@
 
   // ------------------------------------------------------------ 一覧の表示
   const byReceived = (a, b) => String(a.receivedAt).localeCompare(String(b.receivedAt)) || String(a.id).localeCompare(String(b.id));
+  // 一覧の並び：「並び」の値が小さいほど上。値がない古い行は受付時刻を使う
+  const orderOf = (r) => (typeof r.order === 'number' && isFinite(r.order) ? r.order : parseTs(r.receivedAt));
+  const byOrder = (a, b) => (orderOf(a) - orderOf(b)) || String(a.id).localeCompare(String(b.id));
+  const nextOrder = (date) => Math.max(Date.now(), ...rows.filter((r) => r.date === date).map(orderOf)) + 1;
 
-  function cardHtml(r, withDate) {
+  function cardHtml(r, withDate, grip) {
     const cls = ['card'];
     if (r.status === '準備済') cls.push('prep');
     if (r.status === '完了') cls.push('done');
@@ -126,13 +131,13 @@
     const acts = r.status === '取消'
       ? `<div class="note">取消：${esc(r.cancelReason || '')}</div>`
       : `<div class="act">
-          <button type="button" data-act="prep"${on(r.status === '準備済' || r.status === '完了')}>準備</button>
-          <button type="button" data-act="done"${on(r.status === '完了')}>完了</button>
-          <button type="button" data-act="paid"${on(r.paid)}>入金</button>
           <button type="button" data-act="inv"${on(r.invoiced)}>伝票</button>
+          <button type="button" data-act="prep"${on(r.status === '準備済' || r.status === '完了')}>商品</button>
+          <button type="button" data-act="paid"${on(r.paid)}>入金</button>
+          <button type="button" data-act="done"${on(r.status === '完了')}>完了</button>
         </div>`;
     return `<article class="${cls.join(' ')}" data-id="${esc(r.id)}">
-      <div class="top"><span class="place">${dateTxt}${place || '—'}</span><span class="kind ${r.kind === '店頭' ? 's' : ''}">${esc(r.kind || '配達')}</span></div>
+      <div class="top">${grip ? '<span class="grip" aria-label="ドラッグで並べ替え">≡</span>' : ''}<span class="place">${dateTxt}${place || '—'}</span><span class="kind ${r.kind === '店頭' ? 's' : ''}">${esc(r.kind || '配達')}</span></div>
       <div class="name">${esc(r.name)}</div>
       <div class="goods">${esc(r.brand)}${r.qty ? `<b>${esc(r.qty)}</b>` : ''}</div>
       ${r.note ? `<div class="note">${esc(r.note)}</div>` : ''}
@@ -142,18 +147,19 @@
 
   function render() {
     setStatus(status);
+    if (dragState) { pendingRender = true; return; } // ドラッグ中は画面を作り直さない
     // 一覧
     const isToday = viewDate === today();
     $('#dateLabel').innerHTML = esc(fmtDate(viewDate)) + (isToday ? '<span class="today">今日</span>' : '');
     $('#dateInput').value = viewDate;
     $('#fltOpen').checked = ui.open;
     $('#fltVoid').checked = ui.void;
-    const dayRows = rows.filter((r) => r.date === viewDate).sort(byReceived);
+    const dayRows = rows.filter((r) => r.date === viewDate).sort(byOrder);
     const shown = dayRows.filter((r) => (ui.void || r.status !== '取消') && (!ui.open || r.status !== '完了'));
     const live = dayRows.filter((r) => r.status !== '取消');
     const done = live.filter((r) => r.status === '完了').length;
     $('#summary').textContent = `全${live.length}件（配達${live.filter((r) => r.kind !== '店頭').length}・店頭${live.filter((r) => r.kind === '店頭').length}）／ 完了${done}・残り${live.length - done}`;
-    $('#list').innerHTML = shown.length ? shown.map((r) => cardHtml(r, false)).join('') : '<p class="empty">この日の注文はありません</p>';
+    $('#list').innerHTML = shown.length ? shown.map((r) => cardHtml(r, false, true)).join('') : '<p class="empty">この日の注文はありません</p>';
 
     // 伝票待ち
     $('#fltDoneOnly').checked = ui.doneOnly;
@@ -173,7 +179,7 @@
 
   function pendingInvoice() {
     return rows.filter((r) => r.status !== '取消' && !r.paid && !r.invoiced)
-      .sort((a, b) => String(a.date).localeCompare(String(b.date)) || byReceived(a, b));
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)) || byOrder(a, b));
   }
 
   // ------------------------------------------------------------ 操作
@@ -202,7 +208,7 @@
 
   function onCardClick(e) {
     const card = e.target.closest('.card');
-    if (!card) return;
+    if (!card || e.target.closest('.grip')) return;
     const id = card.dataset.id;
     const b = e.target.closest('[data-act]');
     if (b) { act(id, b.dataset.act); return; }
@@ -213,7 +219,7 @@
   // ------------------------------------------------------------ 入力フォーム
   const F = {
     dlg: $('#formDlg'), date: $('#fDate'), name: $('#fName'), brand: $('#fBrand'), qty: $('#fQty'),
-    area: $('#fArea'), time: $('#fTime'), paid: $('#fPaid'), note: $('#fNote')
+    area: $('#fArea'), time: $('#fTime'), paid: $('#fPaid'), note: $('#fNote'), memo: $('#fMemo')
   };
   let editing = null;
   const kindValue = () => (document.querySelector('input[name=fKind]:checked') || {}).value || '配達';
@@ -289,9 +295,11 @@
     $('#restoreBox').hidden = !voided;
     $('#voidInfo').textContent = voided ? `取消済み（${r.cancelReason || '理由なし'}）` : '';
     $('#fSave').disabled = false;
+    F.memo.value = '';
+    $('#memoBox').hidden = !!r;
     drawers.forEach((d) => d());
     F.dlg.showModal();
-    if (!r) F.name.focus();
+    if (!r) F.memo.focus();
   }
   const closeForm = () => { if (F.dlg.open) F.dlg.close(); editing = null; };
 
@@ -319,7 +327,7 @@
       }
       queueOp({
         t: 'create',
-        row: Object.assign({ id: uid(), receivedAt: nowStr(), receiver: cfg.user, status: '未対応', invoiced: false, cancelReason: '' }, v)
+        row: Object.assign({ id: uid(), receivedAt: nowStr(), receiver: cfg.user, status: '未対応', invoiced: false, cancelReason: '', order: nextOrder(v.date) }, v)
       });
       viewDate = v.date;
       setTab('list');
@@ -334,6 +342,127 @@
     }
     closeForm();
     render();
+    sync();
+  }
+
+
+  // ------------------------------------------------------------ まとめ入力（話した文を各欄に振り分ける）
+  function applyParse(manual) {
+    const text = F.memo.value.trim();
+    if (!text || editing || !F.dlg.open) return;
+    const r = window.OrderParse.parse(text, { names: candidates('name', 'names'), areas: candidates('area', 'areas') });
+    F.name.value = r.name;
+    F.brand.value = r.brand;
+    F.qty.value = r.qty;
+    F.area.value = r.area;
+    F.time.value = r.time;
+    if (r.dayOffset != null) F.date.value = addDays(today(), r.dayOffset);
+    if (r.kind) setKind(r.kind);
+    if (r.paid) F.paid.checked = true;
+    if (r.usual && r.name) fillFromLast(r.name); // 「いつもの」は前回の注文で空欄を埋める
+    drawers.forEach((d) => d());
+    [F.name, F.brand, F.qty, F.area, F.time].forEach((el) => {
+      if (!el.value) return;
+      el.classList.add('filled');
+      setTimeout(() => el.classList.remove('filled'), 2000);
+    });
+    if (manual) toast(r.name ? '振り分けました。内容を確認してください' : 'お名前が分かりませんでした。確認してください');
+  }
+  let parseTimer;
+  F.memo.addEventListener('input', () => { clearTimeout(parseTimer); parseTimer = setTimeout(() => applyParse(false), 900); });
+  F.memo.addEventListener('blur', () => { clearTimeout(parseTimer); applyParse(false); });
+  $('#fParse').addEventListener('click', () => { clearTimeout(parseTimer); applyParse(true); });
+
+  // ------------------------------------------------------------ ドラッグで並べ替え（左端の ≡ をつかんで動かす）
+  const listEl = $('#list');
+  listEl.addEventListener('contextmenu', (e) => { if (e.target.closest('.grip')) e.preventDefault(); });
+  listEl.addEventListener('pointerdown', (e) => {
+    const grip = e.target.closest('.grip');
+    if (!grip || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    e.preventDefault();
+    startDrag(grip.closest('.card'), grip, e);
+  });
+
+  function startDrag(card, grip, e) {
+    if (dragState) return;
+    const rect = card.getBoundingClientRect();
+    const ph = document.createElement('div'); // 元の場所に残す空き枠
+    ph.className = 'ph';
+    ph.style.height = rect.height + 'px';
+    card.after(ph);
+    Object.assign(card.style, { position: 'fixed', left: rect.left + 'px', top: rect.top + 'px', width: rect.width + 'px', zIndex: 30 });
+    card.classList.add('dragging');
+    try { grip.setPointerCapture(e.pointerId); } catch (err) { /* 非対応でも動作する */ }
+    const st = dragState = { y: e.clientY, raf: 0 };
+    const offY = e.clientY - rect.top;
+
+    const place = () => {
+      card.style.top = (st.y - offY) + 'px';
+      let before = null;
+      for (const c of listEl.querySelectorAll('.card:not(.dragging)')) {
+        const b = c.getBoundingClientRect();
+        if (st.y < b.top + b.height / 2) { before = c; break; }
+      }
+      if (before) { if (ph.nextElementSibling !== before) listEl.insertBefore(ph, before); }
+      else if (ph !== listEl.lastElementChild) listEl.appendChild(ph);
+    };
+    const loop = () => {
+      if (dragState !== st) return;
+      if (st.y < 150) window.scrollBy(0, -14);
+      else if (st.y > window.innerHeight - 110) window.scrollBy(0, 14);
+      place();
+      st.raf = requestAnimationFrame(loop);
+    };
+    const move = (ev) => { st.y = ev.clientY; };
+    const finish = (ev) => {
+      cancelAnimationFrame(st.raf);
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', finish);
+      grip.removeEventListener('pointercancel', finish);
+      try { grip.releasePointerCapture(e.pointerId); } catch (err) { /* 何もしない */ }
+      card.classList.remove('dragging');
+      card.removeAttribute('style');
+      const commit = ev.type === 'pointerup';
+      if (commit) listEl.insertBefore(card, ph);
+      ph.remove();
+      const prevEl = commit ? card.previousElementSibling : null;
+      const nextEl = commit ? card.nextElementSibling : null;
+      dragState = null;
+      if (commit) applyMove(card.dataset.id, prevEl && prevEl.dataset.id, nextEl && nextEl.dataset.id);
+      pendingRender = false;
+      render();
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', finish);
+    grip.addEventListener('pointercancel', finish);
+    loop();
+  }
+
+  // 動かした行の「並び」の値を、前後の行の間に決める
+  function applyMove(id, prevId, nextId) {
+    const r = rows.find((x) => x.id === id);
+    const p = prevId ? rows.find((x) => x.id === prevId) : null;
+    const n = nextId ? rows.find((x) => x.id === nextId) : null;
+    if (!r || (!p && !n)) return;
+    const ro = orderOf(r), po = p ? orderOf(p) : null, no = n ? orderOf(n) : null;
+    if ((po == null || po < ro) && (no == null || ro < no)) return; // 位置は変わっていない
+    let v = null;
+    if (po == null) v = no - 1000;
+    else if (no == null) v = po + 1000;
+    else if (no - po >= 4) v = (po + no) / 2;
+    if (v != null) {
+      queueOp({ t: 'update', id, changes: { order: v }, user: cfg.user });
+    } else {
+      // 間が詰まりすぎたときは、その日の全件を等間隔に振り直す
+      const day = rows.filter((x) => x.date === r.date).sort(byOrder).filter((x) => x.id !== id);
+      const at = n ? day.findIndex((x) => x.id === nextId) : day.findIndex((x) => x.id === prevId) + 1;
+      day.splice(at < 0 ? day.length : at, 0, r);
+      const start = Math.min(...day.map(orderOf));
+      day.forEach((x, i) => {
+        const o = start + i * 1000;
+        if (orderOf(x) !== o) queueOp({ t: 'update', id: x.id, changes: { order: o }, user: cfg.user });
+      });
+    }
     sync();
   }
 
