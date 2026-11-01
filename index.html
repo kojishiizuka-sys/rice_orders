@@ -19,10 +19,12 @@
   <button id="syncBtn" class="sync" type="button" aria-label="今すぐ同期">…</button>
   <button id="cfgBtn" class="icon" type="button" aria-label="設定">⚙</button>
 </header>
+<div id="warn" class="warn" hidden></div>
 
 <nav class="tabs">
   <button type="button" data-tab="list" class="on">一覧</button>
   <button type="button" data-tab="invoice">伝票待ち <span id="invCount" class="badge" hidden></span></button>
+  <button type="button" data-tab="check">確認</button>
 </nav>
 
 <main>
@@ -36,9 +38,24 @@
     <div class="filters">
       <label class="chip"><input type="checkbox" id="fltOpen"> 未完了のみ</label>
       <label class="chip"><input type="checkbox" id="fltVoid"> 取消も表示</label>
+      <button type="button" id="outBtn" class="chip">🖨 印刷・共有</button>
     </div>
     <p id="summary" class="summary"></p>
     <div id="list" class="cards"></div>
+  </section>
+
+  <section id="viewCheck" hidden>
+    <div class="datenav">
+      <button type="button" id="prevMonth" aria-label="前の月">‹</button>
+      <label class="datepick"><span id="monthLabel"></span><input type="month" id="monthInput"></label>
+      <button type="button" id="nextMonth" aria-label="次の月">›</button>
+    </div>
+    <div class="field" style="margin-top:10px">
+      <input id="chkName" type="search" placeholder="お名前・顧客IDで絞り込み（例：千石）" autocomplete="off">
+    </div>
+    <p id="chkSummary" class="summary"></p>
+    <div id="chkList" class="chk"></div>
+    <p class="hint" style="margin:8px 2px">表示されるのは、直近30日と今後の注文です。FAXなどをまとめて入力した後は、お名前で絞って、元の書類と見比べてください。</p>
   </section>
 
   <section id="viewInvoice" hidden>
@@ -75,6 +92,11 @@
       <label class="lab" for="fName">お名前</label>
       <input id="fName" enterkeyhint="next" autocapitalize="off">
       <div class="chips" id="sgName"></div>
+    </div>
+
+    <div class="field">
+      <label class="lab" for="fCode">顧客ID（楽一のコード）</label>
+      <input id="fCode" enterkeyhint="next" autocapitalize="off" placeholder="最初の配達のとき入力。次回から自動で出ます">
     </div>
 
     <div class="field">
@@ -150,12 +172,28 @@
       <label class="lab" for="cUrl">サーバーのURL</label>
       <input id="cUrl" inputmode="url" placeholder="https://script.google.com/macros/s/…/exec">
     </div>
+    <p class="hint" id="backupInfo"></p>
     <div class="actions">
       <button type="button" id="cClose">閉じる</button>
       <button type="submit" class="primary">保存して同期</button>
     </div>
   </form>
 </dialog>
+
+<dialog id="outDlg">
+  <div class="outbox">
+    <h2 id="outTitle">今日の一覧</h2>
+    <p class="hint">取消を除いた、いまの並び順の一覧です。</p>
+    <textarea id="outText" rows="10" readonly></textarea>
+    <div class="actions">
+      <button type="button" id="outClose">閉じる</button>
+      <button type="button" id="outCopy">コピー</button>
+      <button type="button" id="outPrint" class="primary">印刷・PDF</button>
+    </div>
+  </div>
+</dialog>
+
+<div id="printSheet"></div>
 
 <div id="toast" role="status" aria-live="polite"></div>
 

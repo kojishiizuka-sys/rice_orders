@@ -25,14 +25,46 @@
   let rows = store.get('rows', []);
   let queue = store.get('queue', []);       // まだサーバーに送れていない操作
   let suggest = store.get('suggest', { names: [], brands: [], areas: [] });
+  let masters = store.get('masters', { customers: [], fixes: [] }); // 顧客シートと補正シートの写し
+  let mh = store.get('mh', '');
+  let backupAt = store.get('backup', '');
   const ui = Object.assign({ open: false, void: false, doneOnly: false }, store.get('ui', {}));
   let tab = 'list';
   let viewDate = today();
   let lastSync = 0;
   let status = 'idle'; // idle | sync | ok | off
   let dragState = null, pendingRender = false;
+  let chkMonth = viewDate.slice(0, 7);
 
-  const persist = () => { store.set('rows', rows); store.set('queue', queue); store.set('suggest', suggest); };
+  const persist = () => {
+    store.set('rows', rows); store.set('queue', queue); store.set('suggest', suggest);
+    store.set('masters', masters); store.set('mh', mh); store.set('backup', backupAt);
+  };
+
+  // ------------------------------------------------------------ 顧客（ID・いつもの）と補正（誤変換）
+  let custMap = new Map(), fixMap = new Map(), fixRe = null;
+  const escRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  function buildMasters() {
+    custMap = new Map((masters.customers || []).map((c) => [c[0], { code: c[1] || '', brand: c[2] || '', qty: c[3] || '', area: c[4] || '', kind: c[5] || '', last: c[6] || '' }]));
+    fixMap = new Map((masters.fixes || []).filter((f) => f[0] && f[1]).map((f) => [f[0], f[1]]));
+    const keys = [...fixMap.keys()].sort((a, b) => b.length - a.length).map(escRe);
+    fixRe = keys.length ? new RegExp(keys.join('|'), 'g') : null;
+  }
+  const fixText = (t) => (fixRe ? t.replace(fixRe, (m) => fixMap.get(m)) : t); // 文章の中の誤変換をまとめて直す
+  const canon = (t) => fixMap.get(t) || t;                                      // 欄の値が誤変換そのものなら直す
+  const codeOf = (name) => (custMap.get(name) || {}).code || '';
+  function applyMasterOp(op) {
+    if (op.t === 'cust') {
+      const c = masters.customers.find((x) => x[0] === op.name);
+      if (c) c[1] = op.changes.code; else masters.customers.push([op.name, op.changes.code, '', '', '', '', '']);
+    } else if (op.t === 'fix') {
+      const f = masters.fixes.find((x) => x[0] === op.from);
+      if (f) f[1] = op.to; else masters.fixes.push([op.from, op.to]);
+    } else return;
+    buildMasters();
+  }
+  const isMasterOp = (op) => op.t === 'cust' || op.t === 'fix';
+  buildMasters();
 
   // ------------------------------------------------------------ 通信
   async function api(body) {
@@ -63,7 +95,7 @@
 
   function queueOp(op) {
     queue.push(op);
-    rows = overlay(rows, [op]);
+    if (isMasterOp(op)) applyMasterOp(op); else rows = overlay(rows, [op]);
     persist();
   }
 
@@ -79,7 +111,8 @@
     const sent = queue.slice();
     let retry = false;
     try {
-      const res = await api({ action: 'sync', ops: sent });
+      // 顧客・補正を送ったときは、サーバーの最新の表を必ず受け取る
+      const res = await api({ action: 'sync', ops: sent, mh: sent.some(isMasterOp) ? '' : mh });
       if (!res.ok) {
         if (res.error === 'auth') { toast('合言葉が違います'); setStatus('off'); openCfg(); return; }
         throw new Error(res.error || 'server');
@@ -89,6 +122,10 @@
       if (conflicts) toast('他の人が先に更新していました。内容を確認してください');
       rows = overlay(res.rows || [], queue);
       suggest = res.suggest || suggest;
+      if (res.masters) { masters = res.masters; buildMasters(); }
+      if (res.mh) mh = res.mh;
+      queue.filter(isMasterOp).forEach(applyMasterOp); // まだ送れていない分は重ねておく
+      backupAt = res.backup || '';
       lastSync = Date.now();
       persist();
       setStatus('ok');
@@ -138,7 +175,7 @@
         </div>`;
     return `<article class="${cls.join(' ')}" data-id="${esc(r.id)}">
       <div class="top">${grip ? '<span class="grip" aria-label="ドラッグで並べ替え">≡</span>' : ''}<span class="place">${dateTxt}${place || '—'}</span><span class="kind ${r.kind === '店頭' ? 's' : ''}">${esc(r.kind || '配達')}</span></div>
-      <div class="name">${esc(r.name)}</div>
+      <div class="nameline"><span class="name">${esc(r.name)}</span>${codeOf(r.name) ? `<span class="cid">${esc(codeOf(r.name))}</span>` : ''}</div>
       <div class="goods">${esc(r.brand)}${r.qty ? `<b>${esc(r.qty)}</b>` : ''}</div>
       ${r.note ? `<div class="note">${esc(r.note)}</div>` : ''}
       ${acts}
@@ -175,6 +212,44 @@
       html += cardHtml(r, false);
     }
     $('#invList').innerHTML = html || '<p class="empty">伝票待ちはありません</p>';
+
+    // バックアップの警告（同期できているときだけ）
+    const age = backupAt ? (Date.now() - parseTs(backupAt)) / 86400e3 : Infinity;
+    const warn = $('#warn');
+    warn.hidden = !(lastSync && age > 3);
+    warn.textContent = backupAt
+      ? `⚠ 台帳のバックアップが${Math.floor(age)}日間とれていません。Apps Script の実行数やトリガーを確認してください`
+      : '⚠ 台帳の自動バックアップが未設定です。パソコンで Apps Script の initialize を実行してください';
+    if (tab === 'check') renderCheck();
+  }
+
+  // ------------------------------------------------------------ 確認（月の一覧。入力ミスのチェック用）
+  function renderCheck() {
+    $('#monthLabel').textContent = `${chkMonth.slice(0, 4)}年${Number(chkMonth.slice(5))}月`;
+    $('#monthInput').value = chkMonth;
+    const month = rows.filter((r) => r.status !== '取消' && String(r.date).startsWith(chkMonth));
+    const count = new Map();
+    month.forEach((r) => { const k = r.name + '|' + r.date; count.set(k, (count.get(k) || 0) + 1); });
+    const q = $('#chkName').value.trim();
+    const list = month.filter((r) => !q || r.name.includes(q) || codeOf(r.name).includes(q))
+      .sort((a, b) => String(a.date).localeCompare(String(b.date)) || byOrder(a, b));
+    const dups = list.filter((r) => count.get(r.name + '|' + r.date) > 1).length;
+    $('#chkSummary').textContent = `${list.length}件・${new Set(list.map((r) => r.name)).size}軒` + (dups ? `　⚠ 同じ日に同じお名前：${dups}件` : '');
+    let html = '', last = '';
+    for (const r of list) {
+      if (r.date !== last) {
+        last = r.date;
+        html += `<div class="dayhead">${esc(fmtDate(r.date))}　${list.filter((x) => x.date === r.date).length}件</div>`;
+      }
+      const n = count.get(r.name + '|' + r.date);
+      html += `<div class="crow${r.status === '完了' ? ' done' : ''}${n > 1 ? ' isdup' : ''}" data-id="${esc(r.id)}">
+        <span class="nm">${esc(r.name)}${codeOf(r.name) ? `<span class="cid">${esc(codeOf(r.name))}</span>` : ''}</span>
+        <span class="tm">${esc([r.kind === '店頭' ? '店頭' : '', r.time].filter(Boolean).join(' '))}</span>
+        <span class="gd">${esc(r.brand)}${r.qty ? ` <b>${esc(r.qty)}</b>` : ''}${r.area ? `　${esc(r.area)}` : ''}${r.note ? `　※${esc(r.note)}` : ''}</span>
+        ${n > 1 ? `<span class="dup">⚠ 同じ日に同じお名前が${n}件あります</span>` : ''}
+      </div>`;
+    }
+    $('#chkList').innerHTML = html || '<p class="empty">この条件の注文はありません</p>';
   }
 
   function pendingInvoice() {
@@ -219,9 +294,12 @@
   // ------------------------------------------------------------ 入力フォーム
   const F = {
     dlg: $('#formDlg'), date: $('#fDate'), name: $('#fName'), brand: $('#fBrand'), qty: $('#fQty'),
-    area: $('#fArea'), time: $('#fTime'), paid: $('#fPaid'), note: $('#fNote'), memo: $('#fMemo')
+    area: $('#fArea'), time: $('#fTime'), paid: $('#fPaid'), note: $('#fNote'), memo: $('#fMemo'), code: $('#fCode')
   };
   let editing = null;
+  let memoSnap = null; // まとめ入力が振り分けた直後の値（人が直したら、誤変換として覚える材料にする）
+  const auto = { code: '', brand: '', qty: '', area: '' }; // 自動で入れた値（名前を変えたら入れ替えてよい）
+  const resetAuto = () => { auto.code = auto.brand = auto.qty = auto.area = ''; };
   const kindValue = () => (document.querySelector('input[name=fKind]:checked') || {}).value || '配達';
   const setKind = (v) => { const el = document.querySelector(`input[name=fKind][value="${v}"]`); (el || document.querySelector('input[name=fKind]')).checked = true; };
 
@@ -231,7 +309,8 @@
   }
   function candidates(key, serverKey) {
     const seen = new Set(), out = [];
-    for (const v of [...pendingValues(key).reverse(), ...(suggest[serverKey] || [])]) {
+    const fromCust = key === 'name' ? [...custMap.keys()] : [];
+    for (const v of [...pendingValues(key).reverse(), ...(suggest[serverKey] || []), ...fromCust]) {
       if (v && !seen.has(v)) { seen.add(v); out.push(v); }
     }
     return out;
@@ -241,7 +320,8 @@
     const draw = () => {
       const q = input.value.trim();
       const list = getList().filter((x) => x !== q && (!q || x.includes(q))).slice(0, 6);
-      box.innerHTML = list.map((x) => `<button type="button">${esc(x)}</button>`).join('');
+      const html = list.map((x) => `<button type="button">${esc(x)}</button>`).join('');
+      if (box.innerHTML !== html) box.innerHTML = html; // 同じなら作り直さない（タップの最中に消えないように）
     };
     input.addEventListener('input', draw);
     box.addEventListener('click', (e) => {
@@ -254,20 +334,58 @@
     return draw;
   }
 
-  // 「いつもの」：同じお名前の前回の注文から、空欄の項目を埋める
-  function fillFromLast(name) {
-    if (editing) return;
+  // 「いつもの」：顧客シートの「いつもの」（なければ前回の注文）から、空欄の項目を埋める
+  function lastFromRows(name) {
     const last = rows.filter((r) => r.name === name && r.status !== '取消').sort(byReceived).pop();
-    if (!last) return;
-    if (!F.brand.value) F.brand.value = last.brand || '';
-    if (!F.qty.value) F.qty.value = last.qty || '';
-    if (!F.area.value) F.area.value = last.area || '';
-    setKind(last.kind || '配達');
-    drawers.forEach((d) => d());
+    return last ? { brand: last.brand, qty: last.qty, area: last.area, kind: last.kind } : null;
+  }
+  function setIfFree(el, key, val) {
+    if (!val) return;
+    if (!el.value || el.value === auto[key]) { el.value = val; auto[key] = val; flash(el); }
+  }
+  function flash(el) { el.classList.add('filled'); setTimeout(() => el.classList.remove('filled'), 2000); }
+  function fillUsual(name, keepKind) {
+    if (editing) return;
+    const c = custMap.get(name);
+    const u = c && (c.brand || c.qty || c.area) ? c : lastFromRows(name);
+    if (!u) return;
+    setIfFree(F.brand, 'brand', u.brand);
+    setIfFree(F.qty, 'qty', u.qty);
+    setIfFree(F.area, 'area', u.area);
+    if (!keepKind && u.kind) setKind(u.kind);
   }
 
+  // お名前が決まったとき：誤変換を直し、顧客IDと「いつもの」を入れる
+  function settleName(opts) {
+    if (!F.dlg.open) return;
+    opts = opts || {};
+    let name = F.name.value.trim();
+    const fixed = canon(name);
+    if (fixed !== name) {
+      if (!opts.silent) toast(`「${name}」を「${fixed}」に直しました`);
+      F.name.value = fixed; name = fixed; flash(F.name);
+    }
+    if (custMap.has(name)) {
+      if (!F.code.value || F.code.value === auto.code) { F.code.value = codeOf(name); auto.code = F.code.value; if (F.code.value) flash(F.code); }
+      fillUsual(name, opts.keepKind);
+    } else if (F.code.value === auto.code) {
+      F.code.value = ''; auto.code = '';
+      fillUsual(name, opts.keepKind); // 顧客シートになくても、直近の注文があればそれで埋める
+    } else {
+      fillUsual(name, opts.keepKind);
+    }
+    drawers.forEach((d) => d());
+  }
+  let settleTimer;
+  F.name.addEventListener('input', () => { clearTimeout(settleTimer); settleTimer = setTimeout(() => settleName(), 400); });
+  F.name.addEventListener('change', () => { clearTimeout(settleTimer); settleName(); });
+  [F.brand, F.area].forEach((el) => el.addEventListener('change', () => {
+    const v = el.value.trim(), f = canon(v);
+    if (f !== v) { toast(`「${v}」を「${f}」に直しました`); el.value = f; flash(el); drawers.forEach((d) => d()); }
+  }));
+
   const drawers = [
-    chipsFor('#sgName', F.name, () => candidates('name', 'names'), fillFromLast),
+    chipsFor('#sgName', F.name, () => candidates('name', 'names'), () => settleName()),
     chipsFor('#sgBrand', F.brand, () => candidates('brand', 'brands')),
     chipsFor('#sgArea', F.area, () => candidates('area', 'areas'))
   ];
@@ -281,7 +399,11 @@
     editing = r || null;
     $('#formTitle').textContent = r ? '注文を編集' : '新規注文';
     F.date.value = r ? r.date : (viewDate >= today() ? viewDate : today());
+    resetAuto();
+    memoSnap = null;
     F.name.value = r ? r.name : '';
+    F.code.value = r ? codeOf(r.name) : '';
+    auto.code = F.code.value;
     F.brand.value = r ? r.brand : '';
     F.qty.value = r ? r.qty : '';
     F.area.value = r ? r.area : '';
@@ -316,8 +438,11 @@
       note: F.note.value.trim(),
       paid: F.paid.checked
     };
+    v.name = canon(v.name); v.brand = canon(v.brand); v.area = canon(v.area);
     if (!v.name) { toast('お名前を入れてください'); F.name.focus(); return; }
     $('#fSave').disabled = true; // 二度押し防止
+    const code = F.code.value.trim();
+    const pairs = editing ? [] : learnPairs(v);
     if (!editing) {
       const dup = rows.find((r) => r.status !== '取消' && r.name === v.name && r.date === v.date &&
         Date.now() - parseTs(r.receivedAt) < 10 * 60 * 1000);
@@ -340,17 +465,45 @@
       }
       if (Object.keys(changes).length) queueOp({ t: 'update', id: editing.id, changes, base: editing.ver || undefined, user: cfg.user });
     }
+    if (code !== codeOf(v.name)) queueOp({ t: 'cust', name: v.name, changes: { code } }); // 顧客IDの登録・変更
     closeForm();
     render();
     sync();
+    if (pairs.length) setTimeout(() => askLearn(pairs), 0);
+  }
+
+  // まとめ入力の結果を人が直したものを、誤変換として覚えるかどうか尋ねる
+  function learnPairs(v) {
+    const snap = memoSnap;
+    memoSnap = null;
+    if (!snap) return [];
+    const known = { name: (p) => custMap.has(p), brand: (p) => (suggest.brands || []).includes(p), area: (p) => (suggest.areas || []).includes(p) };
+    const out = [];
+    for (const k of ['name', 'brand', 'area']) {
+      const p = snap[k], f = v[k];
+      if (p && f && p !== f && !fixMap.has(p) && !known[k](p) && !out.some((x) => x[0] === p)) out.push([p, f]);
+    }
+    return out;
+  }
+  function askLearn(pairs) {
+    let n = 0;
+    for (const [p, f] of pairs) {
+      if (confirm(`「${p}」を「${f}」に直しましたね。\n次から、話した「${p}」を自動で「${f}」に直しますか？`)) {
+        queueOp({ t: 'fix', from: p, to: f });
+        n++;
+      }
+    }
+    if (n) { toast('覚えました'); sync(); }
   }
 
 
   // ------------------------------------------------------------ まとめ入力（話した文を各欄に振り分ける）
   function applyParse(manual) {
-    const text = F.memo.value.trim();
+    const text = fixText(F.memo.value.trim()); // 先に、登録済みの誤変換を直す
     if (!text || editing || !F.dlg.open) return;
     const r = window.OrderParse.parse(text, { names: candidates('name', 'names'), areas: candidates('area', 'areas') });
+    resetAuto();
+    memoSnap = { name: r.name, brand: r.brand, area: r.area };
     F.name.value = r.name;
     F.brand.value = r.brand;
     F.qty.value = r.qty;
@@ -359,7 +512,8 @@
     if (r.dayOffset != null) F.date.value = addDays(today(), r.dayOffset);
     if (r.kind) setKind(r.kind);
     if (r.paid) F.paid.checked = true;
-    if (r.usual && r.name) fillFromLast(r.name); // 「いつもの」は前回の注文で空欄を埋める
+    F.code.value = '';
+    if (r.name) settleName({ silent: true, keepKind: !!r.kind }); // 顧客ID・「いつもの」で空欄を埋める
     drawers.forEach((d) => d());
     [F.name, F.brand, F.qty, F.area, F.time].forEach((el) => {
       if (!el.value) return;
@@ -472,6 +626,7 @@
     $('#cUser').value = cfg.user;
     $('#cKey').value = cfg.key;
     $('#cUrl').value = cfg.apiUrl;
+    $('#backupInfo').textContent = backupAt ? `最終バックアップ：${backupAt}` : '最終バックアップ：まだありません';
     if (F.dlg.open) F.dlg.close();
     $('#cfgDlg').showModal();
   }
@@ -499,8 +654,58 @@
     document.querySelectorAll('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
     $('#viewList').hidden = t !== 'list';
     $('#viewInvoice').hidden = t !== 'invoice';
+    $('#viewCheck').hidden = t !== 'check';
+    if (t === 'check') renderCheck();
   }
   document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+
+  // 確認（月の一覧）
+  const shiftMonth = (n) => { const [y, m] = chkMonth.split('-').map(Number); const d = new Date(y, m - 1 + n, 1); chkMonth = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; renderCheck(); };
+  $('#prevMonth').addEventListener('click', () => shiftMonth(-1));
+  $('#nextMonth').addEventListener('click', () => shiftMonth(1));
+  $('#monthInput').addEventListener('change', (e) => { if (/^\d{4}-\d{2}$/.test(e.target.value)) { chkMonth = e.target.value; renderCheck(); } });
+  $('#chkName').addEventListener('input', renderCheck);
+  $('#chkList').addEventListener('click', (e) => {
+    const row = e.target.closest('.crow');
+    const r = row && rows.find((x) => x.id === row.dataset.id);
+    if (r) openForm(r);
+  });
+
+  // 今日の一覧の印刷・共有（障害のときも、紙やLINEで配達を回せるように）
+  function dayRows(date) { return rows.filter((r) => r.date === date && r.status !== '取消').sort(byOrder); }
+  function outText(date) {
+    const day = dayRows(date);
+    const head = `${fmtDate(date)}　配達${day.filter((r) => r.kind !== '店頭').length}件・店頭${day.filter((r) => r.kind === '店頭').length}件`;
+    const lines = day.map((r, i) => {
+      const parts = [`${i + 1}. ${r.name}${codeOf(r.name) ? `[${codeOf(r.name)}]` : ''}${r.kind === '店頭' ? '（店頭）' : ''}`,
+        [r.brand, r.qty].filter(Boolean).join(' '), [r.area, r.time].filter(Boolean).join(' '), r.paid ? '入金済' : '', r.note ? `※${r.note}` : ''];
+      return parts.filter(Boolean).join('　');
+    });
+    return [head, ...lines].join('\n');
+  }
+  function printHtml(date) {
+    const day = dayRows(date);
+    const tr = day.map((r, i) => `<tr><td>${i + 1}</td><td><b>${esc(r.name)}</b>${codeOf(r.name) ? `<br>${esc(codeOf(r.name))}` : ''}</td>
+      <td>${esc(r.brand)}${r.qty ? ` <b>${esc(r.qty)}</b>` : ''}</td><td>${esc(r.area)}</td><td>${esc(r.time)}</td><td>${esc(r.kind || '配達')}</td>
+      <td>${esc(r.note)}</td><td>${r.paid ? '済' : '☐'}</td><td>☐</td></tr>`).join('');
+    return `<h1>${esc(fmtDate(date))} 配達・注文一覧</h1><table><thead><tr><th>順</th><th>お客様</th><th>銘柄・数量</th><th>地域</th><th>時間</th><th>区分</th><th>備考</th><th>入金</th><th>完了</th></tr></thead><tbody>${tr}</tbody></table>`;
+  }
+  $('#outBtn').addEventListener('click', () => {
+    $('#outTitle').textContent = `${fmtDate(viewDate)} の一覧`;
+    $('#outText').value = outText(viewDate);
+    $('#outDlg').showModal();
+  });
+  $('#outClose').addEventListener('click', () => $('#outDlg').close());
+  $('#outCopy').addEventListener('click', async () => {
+    const t = $('#outText').value;
+    try { await navigator.clipboard.writeText(t); }
+    catch (e) { $('#outText').select(); try { document.execCommand('copy'); } catch (e2) { /* 手動で選んでコピーしてもらう */ } }
+    toast('コピーしました。LINEなどに貼り付けられます');
+  });
+  $('#outPrint').addEventListener('click', () => {
+    $('#printSheet').innerHTML = printHtml(viewDate);
+    window.print();
+  });
 
   $('#list').addEventListener('click', onCardClick);
   $('#invList').addEventListener('click', onCardClick);
