@@ -1,6 +1,6 @@
 // 画面のファイルだけをキャッシュします（データの通信には関与しません）。
 // ネット接続があれば常に最新を取りに行き、圏外のときだけキャッシュで起動します。
-const CACHE = 'orders-v3';
+const CACHE = 'orders-v5';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'parse.js', 'config.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png'];
 

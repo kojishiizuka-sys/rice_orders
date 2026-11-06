@@ -25,6 +25,7 @@
   let rows = store.get('rows', []);
   let queue = store.get('queue', []);       // まだサーバーに送れていない操作
   let suggest = store.get('suggest', { names: [], brands: [], areas: [] });
+  let notes = store.get('notes', {}); // 日ごとのメモ { '2026-11-03': '臨時休業' }
   let masters = store.get('masters', { customers: [], fixes: [] }); // 顧客シートと補正シートの写し
   let mh = store.get('mh', '');
   let backupAt = store.get('backup', '');
@@ -35,10 +36,12 @@
   let status = 'idle'; // idle | sync | ok | off
   let dragState = null, pendingRender = false;
   let chkMonth = viewDate.slice(0, 7);
+  const mondayOf = (s) => { const [y, m, d] = s.split('-').map(Number); return addDays(s, -((new Date(y, m - 1, d).getDay() + 6) % 7)); };
+  let weekStart = mondayOf(viewDate);
 
   const persist = () => {
     store.set('rows', rows); store.set('queue', queue); store.set('suggest', suggest);
-    store.set('masters', masters); store.set('mh', mh); store.set('backup', backupAt);
+    store.set('masters', masters); store.set('mh', mh); store.set('backup', backupAt); store.set('notes', notes);
   };
 
   // ------------------------------------------------------------ 顧客（ID・いつもの）と補正（誤変換）
@@ -65,6 +68,7 @@
   }
   const isMasterOp = (op) => op.t === 'cust' || op.t === 'fix';
   buildMasters();
+  function applyNote(op) { if (op.text) notes[op.date] = op.text; else delete notes[op.date]; }
 
   // ------------------------------------------------------------ 通信
   async function api(body) {
@@ -95,7 +99,9 @@
 
   function queueOp(op) {
     queue.push(op);
-    if (isMasterOp(op)) applyMasterOp(op); else rows = overlay(rows, [op]);
+    if (isMasterOp(op)) applyMasterOp(op);
+    else if (op.t === 'daynote') applyNote(op);
+    else rows = overlay(rows, [op]);
     persist();
   }
 
@@ -124,7 +130,9 @@
       suggest = res.suggest || suggest;
       if (res.masters) { masters = res.masters; buildMasters(); }
       if (res.mh) mh = res.mh;
+      if (res.notes) notes = res.notes;
       queue.filter(isMasterOp).forEach(applyMasterOp); // まだ送れていない分は重ねておく
+      queue.filter((o) => o.t === 'daynote').forEach(applyNote);
       backupAt = res.backup || '';
       lastSync = Date.now();
       persist();
@@ -189,6 +197,9 @@
     const isToday = viewDate === today();
     $('#dateLabel').innerHTML = esc(fmtDate(viewDate)) + (isToday ? '<span class="today">今日</span>' : '');
     $('#dateInput').value = viewDate;
+    const dn = $('#dayNote');
+    dn.className = 'daynote' + (notes[viewDate] ? ' has' : '');
+    dn.textContent = notes[viewDate] ? `📝 ${notes[viewDate]}` : '＋ この日のメモ（臨時休業・臨時営業など）';
     $('#fltOpen').checked = ui.open;
     $('#fltVoid').checked = ui.void;
     const dayRows = rows.filter((r) => r.date === viewDate).sort(byOrder);
@@ -221,6 +232,87 @@
       ? `⚠ 台帳のバックアップが${Math.floor(age)}日間とれていません。Apps Script の実行数やトリガーを確認してください`
       : '⚠ 台帳の自動バックアップが未設定です。パソコンで Apps Script の initialize を実行してください';
     if (tab === 'check') renderCheck();
+    if (tab === 'week') renderWeek();
+  }
+
+  // ------------------------------------------------------------ 週間（先々の注文と混み具合）
+  // 数量の「kg」「キロ」だけ合計する（袋・俵などは重さが分からないので合計に入れない）
+  function kgOf(q) {
+    const s = String(q || '').normalize('NFKC');
+    let kg = 0, ok = false;
+    for (const m of s.matchAll(/(\d+(?:\.\d+)?)\s*(?:kg|キロ|ｷﾛ)(?:\s*[x×*]\s*(\d+))?/gi)) {
+      kg += Number(m[1]) * (m[2] ? Number(m[2]) : 1);
+      ok = true;
+    }
+    return ok ? kg : null;
+  }
+  const fmtKg = (k) => `${Number.isInteger(k) ? k : k.toFixed(1)}kg`;
+  function statsOf(list) {
+    const st = { n: list.length, kg: 0, unknown: 0, brands: new Map() };
+    for (const r of list) {
+      const k = kgOf(r.qty);
+      if (k == null) { st.unknown++; continue; }
+      st.kg += k;
+      const b = r.brand || '（銘柄なし）';
+      st.brands.set(b, (st.brands.get(b) || 0) + k);
+    }
+    return st;
+  }
+  const sumText = (st) => `${st.n}件・${fmtKg(st.kg)}${st.unknown ? `（kg不明${st.unknown}件）` : ''}`;
+  const weekRows = (start) => { const end = addDays(start, 6); return rows.filter((r) => r.status !== '取消' && r.date >= start && r.date <= end); };
+
+  function renderWeek() {
+    const days = [...Array(7)].map((_, i) => addDays(weekStart, i));
+    $('#weekLabel').textContent = `${fmtDate(days[0])} 〜 ${fmtDate(days[6])}`;
+    $('#weekInput').value = weekStart;
+
+    // これからの6週間の混み具合
+    const thisMon = mondayOf(today());
+    const weeks = [...Array(6)].map((_, i) => addDays(thisMon, i * 7));
+    const stats = weeks.map((w) => statsOf(weekRows(w)));
+    const maxKg = Math.max(1, ...stats.map((s) => s.kg));
+    $('#wkOverview').innerHTML = weeks.map((w, i) => {
+      const lab = i === 0 ? '今週' : i === 1 ? '来週' : fmtDate(w).replace(/\(.\)/, '') + '〜';
+      return `<button type="button" class="wk${w === weekStart ? ' on' : ''}" data-week="${w}"><b>${lab}</b><span>${stats[i].n}件</span><span>${fmtKg(stats[i].kg)}</span><i style="width:${Math.round(stats[i].kg / maxKg * 100)}%"></i></button>`;
+    }).join('');
+
+    const list = weekRows(weekStart);
+    const st = statsOf(list);
+    $('#wkSummary').textContent = `この週：${sumText(st)}（配達${list.filter((r) => r.kind !== '店頭').length}・店頭${list.filter((r) => r.kind === '店頭').length}）`;
+    $('#wkBrands').innerHTML = st.brands.size
+      ? '銘柄別：' + [...st.brands].sort((a, b) => b[1] - a[1]).map(([b, k]) => `<span class="bchip">${esc(b)} <b>${fmtKg(k)}</b></span>`).join('')
+      : '';
+
+    const dayStats = days.map((d) => statsOf(list.filter((r) => r.date === d)));
+    const dayMax = Math.max(1, ...dayStats.map((s) => s.kg));
+    $('#wkGrid').innerHTML = days.map((d, i) => {
+      const items = list.filter((r) => r.date === d).sort(byOrder);
+      const dt = dayStats[i];
+      const cls = ['wday'];
+      if (d === today()) cls.push('today');
+      if (d < today()) cls.push('past');
+      if (i >= 5) cls.push('we');
+      const body = items.length ? items.map((r) => `<div class="wrow${r.status === '完了' ? ' done' : ''}" data-id="${esc(r.id)}">
+          <span class="wn">${esc(r.name)}${r.kind === '店頭' ? '<em>店頭</em>' : ''}</span>
+          <span class="wg">${esc(r.brand)}${r.qty ? ` <b>${esc(r.qty)}</b>` : ''}</span>
+          ${r.time || r.area ? `<span class="wt">${esc([r.area, r.time].filter(Boolean).join(' '))}</span>` : ''}
+        </div>`).join('') : '<div class="wnone">—</div>';
+      const nt = notes[d] ? `<div class="wnote has" data-note="${d}">📝 ${esc(notes[d])}</div>` : `<div class="wnote" data-note="${d}">＋ メモ</div>`;
+      return `<section class="${cls.join(' ')}"><header data-goto="${d}"><b>${esc(fmtDate(d))}</b><span>${items.length ? sumText(dt) : ''}</span><i style="width:${Math.round(dt.kg / dayMax * 100)}%"></i></header>${nt}${body}</section>`;
+    }).join('');
+  }
+
+  function weekPrintHtml() {
+    const days = [...Array(7)].map((_, i) => addDays(weekStart, i));
+    const list = weekRows(weekStart);
+    const st = statsOf(list);
+    const brands = [...st.brands].sort((a, b) => b[1] - a[1]).map(([b, k]) => `${esc(b)} ${fmtKg(k)}`).join('　');
+    const cells = days.map((d) => {
+      const items = list.filter((r) => r.date === d).sort(byOrder);
+      return `<td>${items.map((r) => `<div class="pw">${r.status === '完了' ? '✔ ' : ''}<b>${esc(r.name)}</b>${r.kind === '店頭' ? '（店頭）' : ''}<br>${esc([r.brand, r.qty].filter(Boolean).join(' '))}${r.time ? ` ${esc(r.time)}` : ''}</div>`).join('')}</td>`;
+    }).join('');
+    const heads = days.map((d) => { const s = statsOf(list.filter((r) => r.date === d)); return `<th>${esc(fmtDate(d))}<br><small>${s.n ? sumText(s) : ''}</small>${notes[d] ? `<br><small>📝 ${esc(notes[d])}</small>` : ''}</th>`; }).join('');
+    return `<h1>${esc(fmtDate(days[0]))} 〜 ${esc(fmtDate(days[6]))} 週間予定</h1><p>${sumText(st)}${brands ? `　銘柄別：${brands}` : ''}</p><table class="pweek"><thead><tr>${heads}</tr></thead><tbody><tr>${cells}</tr></tbody></table>`;
   }
 
   // ------------------------------------------------------------ 確認（月の一覧。入力ミスのチェック用）
@@ -655,9 +747,62 @@
     $('#viewList').hidden = t !== 'list';
     $('#viewInvoice').hidden = t !== 'invoice';
     $('#viewCheck').hidden = t !== 'check';
+    $('#viewWeek').hidden = t !== 'week';
+    document.querySelector('main').classList.toggle('wide', t === 'week'); // 週間はPCで横に広げる
     if (t === 'check') renderCheck();
+    if (t === 'week') renderWeek();
   }
   document.querySelectorAll('.tabs button').forEach((b) => b.addEventListener('click', () => setTab(b.dataset.tab)));
+
+  // 日ごとのメモ
+  let noteDate = '';
+  function openNote(date) {
+    noteDate = date;
+    $('#noteTitle').textContent = `${fmtDate(date)} のメモ`;
+    $('#noteText').value = notes[date] || '';
+    $('#noteDlg').showModal();
+  }
+  $('#dayNote').addEventListener('click', () => openNote(viewDate));
+  $('#noteChips').addEventListener('click', (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const t = $('#noteText');
+    t.value = t.value.trim() ? `${t.value.trim()}　${b.textContent}` : b.textContent;
+  });
+  $('#noteClose').addEventListener('click', () => $('#noteDlg').close());
+  function saveNote(text) {
+    text = text.trim().slice(0, 200);
+    if (text !== (notes[noteDate] || '')) {
+      queueOp({ t: 'daynote', date: noteDate, text, user: cfg.user });
+      render();
+      sync();
+    }
+    $('#noteDlg').close();
+  }
+  $('#noteSave').addEventListener('click', () => saveNote($('#noteText').value));
+  $('#noteClear').addEventListener('click', () => saveNote(''));
+
+  // 週間
+  const shiftWeek = (n) => { weekStart = addDays(weekStart, n * 7); renderWeek(); };
+  $('#prevWeek').addEventListener('click', () => shiftWeek(-1));
+  $('#nextWeek').addEventListener('click', () => shiftWeek(1));
+  $('#thisWeek').addEventListener('click', () => { weekStart = mondayOf(today()); renderWeek(); });
+  $('#weekInput').addEventListener('change', (e) => { if (e.target.value) { weekStart = mondayOf(e.target.value); renderWeek(); } });
+  $('#wkOverview').addEventListener('click', (e) => { const b = e.target.closest('[data-week]'); if (b) { weekStart = b.dataset.week; renderWeek(); } });
+  $('#wkGrid').addEventListener('click', (e) => {
+    const nt = e.target.closest('[data-note]');
+    if (nt) { openNote(nt.dataset.note); return; }
+    const row = e.target.closest('.wrow');
+    if (row) { const r = rows.find((x) => x.id === row.dataset.id); if (r) openForm(r); return; }
+    const head = e.target.closest('[data-goto]');
+    if (head) { viewDate = head.dataset.goto; setTab('list'); render(); }
+  });
+  $('#wkPrint').addEventListener('click', () => {
+    const ps = $('#printSheet');
+    ps.classList.add('printweek');
+    ps.innerHTML = weekPrintHtml();
+    window.print();
+  });
+  window.addEventListener('afterprint', () => $('#printSheet').classList.remove('printweek'));
 
   // 確認（月の一覧）
   const shiftMonth = (n) => { const [y, m] = chkMonth.split('-').map(Number); const d = new Date(y, m - 1 + n, 1); chkMonth = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; renderCheck(); };
@@ -676,19 +821,20 @@
   function outText(date) {
     const day = dayRows(date);
     const head = `${fmtDate(date)}　配達${day.filter((r) => r.kind !== '店頭').length}件・店頭${day.filter((r) => r.kind === '店頭').length}件`;
+    const noteLine = notes[date] ? [`📝 ${notes[date]}`] : [];
     const lines = day.map((r, i) => {
       const parts = [`${i + 1}. ${r.name}${codeOf(r.name) ? `[${codeOf(r.name)}]` : ''}${r.kind === '店頭' ? '（店頭）' : ''}`,
         [r.brand, r.qty].filter(Boolean).join(' '), [r.area, r.time].filter(Boolean).join(' '), r.paid ? '入金済' : '', r.note ? `※${r.note}` : ''];
       return parts.filter(Boolean).join('　');
     });
-    return [head, ...lines].join('\n');
+    return [head, ...noteLine, ...lines].join('\n');
   }
   function printHtml(date) {
     const day = dayRows(date);
     const tr = day.map((r, i) => `<tr><td>${i + 1}</td><td><b>${esc(r.name)}</b>${codeOf(r.name) ? `<br>${esc(codeOf(r.name))}` : ''}</td>
       <td>${esc(r.brand)}${r.qty ? ` <b>${esc(r.qty)}</b>` : ''}</td><td>${esc(r.area)}</td><td>${esc(r.time)}</td><td>${esc(r.kind || '配達')}</td>
       <td>${esc(r.note)}</td><td>${r.paid ? '済' : '☐'}</td><td>☐</td></tr>`).join('');
-    return `<h1>${esc(fmtDate(date))} 配達・注文一覧</h1><table><thead><tr><th>順</th><th>お客様</th><th>銘柄・数量</th><th>地域</th><th>時間</th><th>区分</th><th>備考</th><th>入金</th><th>完了</th></tr></thead><tbody>${tr}</tbody></table>`;
+    return `<h1>${esc(fmtDate(date))} 配達・注文一覧</h1>${notes[date] ? `<p>📝 ${esc(notes[date])}</p>` : ''}<table><thead><tr><th>順</th><th>お客様</th><th>銘柄・数量</th><th>地域</th><th>時間</th><th>区分</th><th>備考</th><th>入金</th><th>完了</th></tr></thead><tbody>${tr}</tbody></table>`;
   }
   $('#outBtn').addEventListener('click', () => {
     $('#outTitle').textContent = `${fmtDate(viewDate)} の一覧`;
@@ -703,6 +849,7 @@
     toast('コピーしました。LINEなどに貼り付けられます');
   });
   $('#outPrint').addEventListener('click', () => {
+    $('#printSheet').classList.remove('printweek');
     $('#printSheet').innerHTML = printHtml(viewDate);
     window.print();
   });

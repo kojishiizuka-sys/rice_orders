@@ -23,6 +23,7 @@
 
 <nav class="tabs">
   <button type="button" data-tab="list" class="on">一覧</button>
+  <button type="button" data-tab="week">週間</button>
   <button type="button" data-tab="invoice">伝票待ち <span id="invCount" class="badge" hidden></span></button>
   <button type="button" data-tab="check">確認</button>
 </nav>
@@ -35,6 +36,7 @@
       <button type="button" id="nextDay" aria-label="次の日">›</button>
       <button type="button" id="todayBtn" class="small">今日</button>
     </div>
+    <button type="button" id="dayNote" class="daynote"></button>
     <div class="filters">
       <label class="chip"><input type="checkbox" id="fltOpen"> 未完了のみ</label>
       <label class="chip"><input type="checkbox" id="fltVoid"> 取消も表示</label>
@@ -42,6 +44,21 @@
     </div>
     <p id="summary" class="summary"></p>
     <div id="list" class="cards"></div>
+  </section>
+
+  <section id="viewWeek" hidden>
+    <div class="datenav">
+      <button type="button" id="prevWeek" aria-label="前の週">‹</button>
+      <label class="datepick"><span id="weekLabel"></span><input type="date" id="weekInput"></label>
+      <button type="button" id="nextWeek" aria-label="次の週">›</button>
+      <button type="button" id="thisWeek" class="small">今週</button>
+    </div>
+    <div id="wkOverview" class="wkov"></div>
+    <p id="wkSummary" class="summary"></p>
+    <div id="wkBrands" class="wkbrands"></div>
+    <div id="wkGrid" class="week"></div>
+    <div class="row" style="margin-top:10px"><button type="button" id="wkPrint" class="small">🖨 この週を印刷</button></div>
+    <p class="hint" style="margin:8px 2px">数量の「kg」「キロ」だけを合計しています（袋・俵などは合計に入らず「kg不明」と数えます）。日付の見出しをタップすると、その日の一覧に移ります。PCのブラウザで開くと、7日が横に並びます。</p>
   </section>
 
   <section id="viewCheck" hidden>
@@ -178,6 +195,22 @@
       <button type="submit" class="primary">保存して同期</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="noteDlg">
+  <div class="outbox">
+    <h2 id="noteTitle">この日のメモ</h2>
+    <p class="hint">臨時休業・臨時営業など、その日の特記事項です。全員の画面（一覧・週間）に出ます。</p>
+    <div class="chips" id="noteChips">
+      <button type="button">臨時休業</button><button type="button">臨時営業</button><button type="button">午前のみ営業</button><button type="button">午後のみ営業</button><button type="button">配達なし</button>
+    </div>
+    <textarea id="noteText" rows="3" maxlength="200" placeholder="例：臨時休業（研修のため）"></textarea>
+    <div class="actions">
+      <button type="button" id="noteClose">閉じる</button>
+      <button type="button" id="noteClear" class="danger">消す</button>
+      <button type="button" id="noteSave" class="primary">保存</button>
+    </div>
+  </div>
 </dialog>
 
 <dialog id="outDlg">
