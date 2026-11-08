@@ -1,11 +1,16 @@
 // 画面のファイルだけをキャッシュします（データの通信には関与しません）。
 // ネット接続があれば常に最新を取りに行き、圏外のときだけキャッシュで起動します。
-const CACHE = 'orders-v5';
+const CACHE = 'orders-v6';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'parse.js', 'config.js', 'manifest.webmanifest',
   'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // ブラウザの一時保存（HTTPキャッシュ）を使わず、毎回サーバーに確認して取得する
+  e.waitUntil(
+    caches.open(CACHE)
+      .then((c) => Promise.all(SHELL.map((u) => fetch(u, { cache: 'no-cache' }).then((r) => (r.ok ? c.put(u, r) : null)))))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', (e) => {
@@ -21,7 +26,7 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(req.url);
   if (req.method !== 'GET' || url.origin !== location.origin) return;
   e.respondWith(
-    fetch(req)
+    fetch(req, { cache: 'no-cache' }) // 更新直後でも古い画面が残らないように、必ず最新か確認する
       .then((res) => {
         if (res.ok) {
           const copy = res.clone();
