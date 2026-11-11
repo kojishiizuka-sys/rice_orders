@@ -185,6 +185,7 @@
       <div class="top">${grip ? '<span class="grip" aria-label="ドラッグで並べ替え">≡</span>' : ''}<span class="place">${dateTxt}${place || '—'}</span><span class="kind ${r.kind === '店頭' ? 's' : ''}">${esc(r.kind || '配達')}</span></div>
       <div class="nameline"><span class="name">${esc(r.name)}</span>${codeOf(r.name) ? `<span class="cid">${esc(codeOf(r.name))}</span>` : ''}</div>
       <div class="goods">${esc(r.brand)}${r.qty ? `<b>${esc(r.qty)}</b>` : ''}</div>
+      ${r.other ? `<div class="goods">${esc(r.other)}</div>` : ''}
       ${r.note ? `<div class="note">${esc(r.note)}</div>` : ''}
       ${acts}
     </article>`;
@@ -295,6 +296,7 @@
       const body = items.length ? items.map((r) => `<div class="wrow${r.status === '完了' ? ' done' : ''}" data-id="${esc(r.id)}">
           <span class="wn">${esc(r.name)}${r.kind === '店頭' ? '<em>店頭</em>' : ''}</span>
           <span class="wg">${esc(r.brand)}${r.qty ? ` <b>${esc(r.qty)}</b>` : ''}</span>
+          ${r.other ? `<span class="wg">${esc(r.other)}</span>` : ''}
           ${r.time || r.area ? `<span class="wt">${esc([r.area, r.time].filter(Boolean).join(' '))}</span>` : ''}
         </div>`).join('') : '<div class="wnone">—</div>';
       const nt = notes[d] ? `<div class="wnote has" data-note="${d}">📝 ${esc(notes[d])}</div>` : `<div class="wnote" data-note="${d}">＋ メモ</div>`;
@@ -309,7 +311,7 @@
     const brands = [...st.brands].sort((a, b) => b[1] - a[1]).map(([b, k]) => `${esc(b)} ${fmtKg(k)}`).join('　');
     const cells = days.map((d) => {
       const items = list.filter((r) => r.date === d).sort(byOrder);
-      return `<td>${items.map((r) => `<div class="pw">${r.status === '完了' ? '✔ ' : ''}<b>${esc(r.name)}</b>${r.kind === '店頭' ? '（店頭）' : ''}<br>${esc([r.brand, r.qty].filter(Boolean).join(' '))}${r.time ? ` ${esc(r.time)}` : ''}</div>`).join('')}</td>`;
+      return `<td>${items.map((r) => `<div class="pw">${r.status === '完了' ? '✔ ' : ''}<b>${esc(r.name)}</b>${r.kind === '店頭' ? '（店頭）' : ''}<br>${esc([r.brand, r.qty].filter(Boolean).join(' '))}${r.other ? `<br>${esc(r.other)}` : ''}${r.time ? ` ${esc(r.time)}` : ''}</div>`).join('')}</td>`;
     }).join('');
     const heads = days.map((d) => { const s = statsOf(list.filter((r) => r.date === d)); return `<th>${esc(fmtDate(d))}<br><small>${s.n ? sumText(s) : ''}</small>${notes[d] ? `<br><small>📝 ${esc(notes[d])}</small>` : ''}</th>`; }).join('');
     return `<h1>${esc(fmtDate(days[0]))} 〜 ${esc(fmtDate(days[6]))} 週間予定</h1><p>${sumText(st)}${brands ? `　銘柄別：${brands}` : ''}</p><table class="pweek"><thead><tr>${heads}</tr></thead><tbody><tr>${cells}</tr></tbody></table>`;
@@ -337,7 +339,7 @@
       html += `<div class="crow${r.status === '完了' ? ' done' : ''}${n > 1 ? ' isdup' : ''}" data-id="${esc(r.id)}">
         <span class="nm">${esc(r.name)}${codeOf(r.name) ? `<span class="cid">${esc(codeOf(r.name))}</span>` : ''}</span>
         <span class="tm">${esc([r.kind === '店頭' ? '店頭' : '', r.time].filter(Boolean).join(' '))}</span>
-        <span class="gd">${esc(r.brand)}${r.qty ? ` <b>${esc(r.qty)}</b>` : ''}${r.area ? `　${esc(r.area)}` : ''}${r.note ? `　※${esc(r.note)}` : ''}</span>
+        <span class="gd">${esc(r.brand)}${r.qty ? ` <b>${esc(r.qty)}</b>` : ''}${r.other ? `　＋${esc(r.other)}` : ''}${r.area ? `　${esc(r.area)}` : ''}${r.note ? `　※${esc(r.note)}` : ''}</span>
         ${n > 1 ? `<span class="dup">⚠ 同じ日に同じお名前が${n}件あります</span>` : ''}
       </div>`;
     }
@@ -385,7 +387,7 @@
 
   // ------------------------------------------------------------ 入力フォーム
   const F = {
-    dlg: $('#formDlg'), date: $('#fDate'), name: $('#fName'), brand: $('#fBrand'), qty: $('#fQty'),
+    dlg: $('#formDlg'), date: $('#fDate'), name: $('#fName'), brand: $('#fBrand'), qty: $('#fQty'), other: $('#fOther'),
     area: $('#fArea'), time: $('#fTime'), paid: $('#fPaid'), note: $('#fNote'), memo: $('#fMemo'), code: $('#fCode')
   };
   let editing = null;
@@ -498,6 +500,7 @@
     auto.code = F.code.value;
     F.brand.value = r ? r.brand : '';
     F.qty.value = r ? r.qty : '';
+    F.other.value = r ? (r.other || '') : '';
     F.area.value = r ? r.area : '';
     F.time.value = r ? r.time : '';
     F.note.value = r ? r.note : '';
@@ -524,6 +527,7 @@
       name: F.name.value.trim(),
       brand: F.brand.value.trim(),
       qty: F.qty.value.trim(),
+      other: F.other.value.trim(),
       area: F.area.value.trim(),
       time: F.time.value.trim(),
       kind: kindValue(),
@@ -824,7 +828,7 @@
     const noteLine = notes[date] ? [`📝 ${notes[date]}`] : [];
     const lines = day.map((r, i) => {
       const parts = [`${i + 1}. ${r.name}${codeOf(r.name) ? `[${codeOf(r.name)}]` : ''}${r.kind === '店頭' ? '（店頭）' : ''}`,
-        [r.brand, r.qty].filter(Boolean).join(' '), [r.area, r.time].filter(Boolean).join(' '), r.paid ? '入金済' : '', r.note ? `※${r.note}` : ''];
+        [r.brand, r.qty].filter(Boolean).join(' '), r.other ? `＋${r.other}` : '', [r.area, r.time].filter(Boolean).join(' '), r.paid ? '入金済' : '', r.note ? `※${r.note}` : ''];
       return parts.filter(Boolean).join('　');
     });
     return [head, ...noteLine, ...lines].join('\n');
@@ -832,7 +836,7 @@
   function printHtml(date) {
     const day = dayRows(date);
     const tr = day.map((r, i) => `<tr><td>${i + 1}</td><td><b>${esc(r.name)}</b>${codeOf(r.name) ? `<br>${esc(codeOf(r.name))}` : ''}</td>
-      <td>${esc(r.brand)}${r.qty ? ` <b>${esc(r.qty)}</b>` : ''}</td><td>${esc(r.area)}</td><td>${esc(r.time)}</td><td>${esc(r.kind || '配達')}</td>
+      <td>${esc(r.brand)}${r.qty ? ` <b>${esc(r.qty)}</b>` : ''}${r.other ? `<br>＋${esc(r.other)}` : ''}</td><td>${esc(r.area)}</td><td>${esc(r.time)}</td><td>${esc(r.kind || '配達')}</td>
       <td>${esc(r.note)}</td><td>${r.paid ? '済' : '☐'}</td><td>☐</td></tr>`).join('');
     return `<h1>${esc(fmtDate(date))} 配達・注文一覧</h1>${notes[date] ? `<p>📝 ${esc(notes[date])}</p>` : ''}<table><thead><tr><th>順</th><th>お客様</th><th>銘柄・数量</th><th>地域</th><th>時間</th><th>区分</th><th>備考</th><th>入金</th><th>完了</th></tr></thead><tbody>${tr}</tbody></table>`;
   }
