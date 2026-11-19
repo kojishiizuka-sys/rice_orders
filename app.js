@@ -15,6 +15,43 @@
   const parseTs = (s) => new Date(String(s).replace(' ', 'T')).getTime();
   const WD = ['日', '月', '火', '水', '木', '金', '土'];
   const fmtDate = (s) => { const [y, m, d] = s.split('-').map(Number); return `${m}/${d}(${WD[new Date(y, m - 1, d).getDay()]})`; };
+  // 日本の国民の祝日（内閣府の定めに沿って計算。通信なし。2000〜2099年）
+  const holCache = {};
+  function holidaysOf(y) {
+    if (holCache[y]) return holCache[y];
+    const h = {};
+    const put = (m, d, n) => { h[`${y}-${pad(m)}-${pad(d)}`] = n; };
+    const nth = (m, n, dow) => { const first = new Date(y, m - 1, 1).getDay(); return 1 + ((dow - first + 7) % 7) + (n - 1) * 7; };
+    const k = y - 1980, adj = Math.floor(k / 4);
+    put(1, 1, '元日'); put(1, nth(1, 2, 1), '成人の日'); put(2, 11, '建国記念の日');
+    if (y >= 2020) put(2, 23, '天皇誕生日');
+    put(3, Math.floor(20.8431 + 0.242194 * k) - adj, '春分の日');
+    put(4, 29, '昭和の日'); put(5, 3, '憲法記念日'); put(5, 4, 'みどりの日'); put(5, 5, 'こどもの日');
+    if (y === 2020) { put(7, 23, '海の日'); put(8, 10, '山の日'); put(7, 24, 'スポーツの日'); }
+    else if (y === 2021) { put(7, 22, '海の日'); put(8, 8, '山の日'); put(7, 23, 'スポーツの日'); }
+    else { put(7, nth(7, 3, 1), '海の日'); put(8, 11, '山の日'); put(10, nth(10, 2, 1), y >= 2020 ? 'スポーツの日' : '体育の日'); }
+    put(9, nth(9, 3, 1), '敬老の日');
+    put(9, Math.floor(23.2488 + 0.242194 * k) - adj, '秋分の日');
+    put(11, 3, '文化の日'); put(11, 23, '勤労感謝の日');
+    // 国民の休日（前後を祝日にはさまれた平日）
+    Object.keys(h).forEach((d) => {
+      const nx = addDays(d, 2), mid = addDays(d, 1);
+      if (h[nx] && !h[mid] && new Date(...mid.split('-').map((v, i) => (i === 1 ? v - 1 : +v))).getDay() !== 0) h[mid] = '国民の休日';
+    });
+    // 振替休日（祝日が日曜なら、次の祝日でない日）
+    Object.keys(h).sort().forEach((d) => {
+      if (new Date(...d.split('-').map((v, i) => (i === 1 ? v - 1 : +v))).getDay() === 0 && !/振替/.test(h[d])) {
+        let n = addDays(d, 1);
+        while (h[n]) n = addDays(n, 1);
+        h[n] = '振替休日';
+      }
+    });
+    return (holCache[y] = h);
+  }
+  const holidayName = (d) => (holidaysOf(Number(String(d).slice(0, 4)))[d] || '');
+  const isSunday = (d) => { const [y, m, dd] = d.split('-').map(Number); return new Date(y, m - 1, dd).getDay() === 0; };
+  // 日曜・祝日は赤字、祝日は名前も添える
+  const dateHtml = (d) => { const h = holidayName(d); const t = esc(fmtDate(d)) + (h ? `<small class="holn">${esc(h)}</small>` : ''); return (h || isSunday(d)) ? `<span class="hol">${t}</span>` : t; };
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -196,7 +233,7 @@
     if (dragState) { pendingRender = true; return; } // ドラッグ中は画面を作り直さない
     // 一覧
     const isToday = viewDate === today();
-    $('#dateLabel').innerHTML = esc(fmtDate(viewDate)) + (isToday ? '<span class="today">今日</span>' : '');
+    $('#dateLabel').innerHTML = dateHtml(viewDate) + (isToday ? '<span class="today">今日</span>' : '');
     $('#dateInput').value = viewDate;
     const dn = $('#dayNote');
     dn.className = 'daynote' + (notes[viewDate] ? ' has' : '');
@@ -220,7 +257,7 @@
     $('#invSummary').textContent = `伝票がまだの注文（本日以降）：${pending.length}件（入金済みは対象外）`;
     let html = '', lastDate = '';
     for (const r of pendShown) {
-      if (r.date !== lastDate) { lastDate = r.date; html += `<div class="dayhead">${esc(fmtDate(r.date))}</div>`; }
+      if (r.date !== lastDate) { lastDate = r.date; html += `<div class="dayhead">${dateHtml(r.date)}</div>`; }
       html += cardHtml(r, false);
     }
     $('#invList').innerHTML = html || '<p class="empty">伝票待ちはありません</p>';
@@ -292,7 +329,7 @@
       const cls = ['wday'];
       if (d === today()) cls.push('today');
       if (d < today()) cls.push('past');
-      if (i >= 5) cls.push('we');
+      if (isSunday(d) || holidayName(d)) cls.push('hol');
       const body = items.length ? items.map((r) => `<div class="wrow${r.status === '完了' ? ' done' : ''}" data-id="${esc(r.id)}">
           <span class="wn">${esc(r.name)}${r.kind === '店頭' ? '<em>店頭</em>' : ''}</span>
           <span class="wg">${esc(r.brand)}${r.qty ? ` <b>${esc(r.qty)}</b>` : ''}</span>
@@ -300,7 +337,7 @@
           ${r.time || r.area ? `<span class="wt">${esc(r.area || '')}${r.area && r.time ? ' ' : ''}${r.time ? `<span class="time">${esc(r.time)}</span>` : ''}</span>` : ''}
         </div>`).join('') : '<div class="wnone">—</div>';
       const nt = notes[d] ? `<div class="wnote has" data-note="${d}">📝 ${esc(notes[d])}</div>` : `<div class="wnote" data-note="${d}">＋ メモ</div>`;
-      return `<section class="${cls.join(' ')}"><header data-goto="${d}"><b>${esc(fmtDate(d))}</b><span>${items.length ? sumText(dt) : ''}</span><i style="width:${Math.round(dt.kg / dayMax * 100)}%"></i></header>${nt}${body}</section>`;
+      return `<section class="${cls.join(' ')}"><header data-goto="${d}"><b>${esc(fmtDate(d))}</b>${holidayName(d) ? `<em class="holn">${esc(holidayName(d))}</em>` : ''}<span>${items.length ? sumText(dt) : ''}</span><i style="width:${Math.round(dt.kg / dayMax * 100)}%"></i></header>${nt}${body}</section>`;
     }).join('');
   }
 
@@ -313,7 +350,7 @@
       const items = list.filter((r) => r.date === d).sort(byOrder);
       return `<td>${items.map((r) => `<div class="pw">${r.status === '完了' ? '✔ ' : ''}<b>${esc(r.name)}</b>${r.kind === '店頭' ? '（店頭）' : ''}<br>${esc([r.brand, r.qty].filter(Boolean).join(' '))}${r.other ? `<br>${esc(r.other)}` : ''}${r.time ? ` ${esc(r.time)}` : ''}</div>`).join('')}</td>`;
     }).join('');
-    const heads = days.map((d) => { const s = statsOf(list.filter((r) => r.date === d)); return `<th>${esc(fmtDate(d))}<br><small>${s.n ? sumText(s) : ''}</small>${notes[d] ? `<br><small>📝 ${esc(notes[d])}</small>` : ''}</th>`; }).join('');
+    const heads = days.map((d) => { const s = statsOf(list.filter((r) => r.date === d)); return `<th>${esc(fmtDate(d))}${holidayName(d) ? `<br><small>（${esc(holidayName(d))}）</small>` : ''}<br><small>${s.n ? sumText(s) : ''}</small>${notes[d] ? `<br><small>📝 ${esc(notes[d])}</small>` : ''}</th>`; }).join('');
     return `<h1>${esc(fmtDate(days[0]))} 〜 ${esc(fmtDate(days[6]))} 週間予定</h1><p>${sumText(st)}${brands ? `　銘柄別：${brands}` : ''}</p><table class="pweek"><thead><tr>${heads}</tr></thead><tbody><tr>${cells}</tr></tbody></table>`;
   }
 
@@ -333,7 +370,7 @@
     for (const r of list) {
       if (r.date !== last) {
         last = r.date;
-        html += `<div class="dayhead">${esc(fmtDate(r.date))}　${list.filter((x) => x.date === r.date).length}件</div>`;
+        html += `<div class="dayhead">${dateHtml(r.date)}　${list.filter((x) => x.date === r.date).length}件</div>`;
       }
       const n = count.get(r.name + '|' + r.date);
       html += `<div class="crow${r.status === '完了' ? ' done' : ''}${n > 1 ? ' isdup' : ''}" data-id="${esc(r.id)}">

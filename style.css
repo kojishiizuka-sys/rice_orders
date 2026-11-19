@@ -218,7 +218,8 @@ main.wide { max-width: 1500px; }
 .wday.today { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent) inset; }
 .wday.past { opacity: .6; }
 .wday header { position: relative; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 8px 10px 10px; background: var(--bg); border-bottom: 1px solid var(--line); cursor: pointer; flex-wrap: wrap; }
-.wday.we header b { color: var(--danger); }
+.wday.hol header b, .wday.hol header .holn { color: var(--danger); }
+.wday header .holn { font-style: normal; font-weight: 700; font-size: 12px; margin-right: auto; }
 .wday header span { font-size: 13px; color: var(--muted); }
 .wrow { padding: 6px 10px; border-bottom: 1px solid var(--line); cursor: pointer; line-height: 1.35; }
 .wrow:last-child { border-bottom: 0; }
@@ -252,3 +253,7 @@ main.wide { max-width: 1500px; }
 
 .time { color: #c62828; font-weight: 700; }
 @media print { .time { color: #000; } }
+.hol { color: var(--danger); }
+.datepick .hol small, .dayhead .hol small { font-size: 12px; font-weight: 700; margin-left: 6px; }
+.datepick .holn { display: inline; }
+@media print { .hol { color: #000; } }
