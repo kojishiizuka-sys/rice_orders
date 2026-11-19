@@ -170,7 +170,7 @@
     if (r.status === '準備済') cls.push('prep');
     if (r.status === '完了') cls.push('done');
     if (r.status === '取消') cls.push('void');
-    const place = [r.area, r.time].filter(Boolean).map(esc).join(' ・ ');
+    const place = [r.area ? esc(r.area) : '', r.time ? `<span class="time">${esc(r.time)}</span>` : ''].filter(Boolean).join(' ・ ');
     const dateTxt = withDate ? `<b>${esc(fmtDate(r.date))}</b> ` : '';
     const on = (c) => (c ? ' class="on"' : '');
     const acts = r.status === '取消'
@@ -217,7 +217,7 @@
     const badge = $('#invCount');
     badge.hidden = !pending.length;
     badge.textContent = pending.length;
-    $('#invSummary').textContent = `伝票がまだの注文：${pending.length}件（入金済みは対象外）`;
+    $('#invSummary').textContent = `伝票がまだの注文（本日以降）：${pending.length}件（入金済みは対象外）`;
     let html = '', lastDate = '';
     for (const r of pendShown) {
       if (r.date !== lastDate) { lastDate = r.date; html += `<div class="dayhead">${esc(fmtDate(r.date))}</div>`; }
@@ -297,7 +297,7 @@
           <span class="wn">${esc(r.name)}${r.kind === '店頭' ? '<em>店頭</em>' : ''}</span>
           <span class="wg">${esc(r.brand)}${r.qty ? ` <b>${esc(r.qty)}</b>` : ''}</span>
           ${r.other ? `<span class="wg">${esc(r.other)}</span>` : ''}
-          ${r.time || r.area ? `<span class="wt">${esc([r.area, r.time].filter(Boolean).join(' '))}</span>` : ''}
+          ${r.time || r.area ? `<span class="wt">${esc(r.area || '')}${r.area && r.time ? ' ' : ''}${r.time ? `<span class="time">${esc(r.time)}</span>` : ''}</span>` : ''}
         </div>`).join('') : '<div class="wnone">—</div>';
       const nt = notes[d] ? `<div class="wnote has" data-note="${d}">📝 ${esc(notes[d])}</div>` : `<div class="wnote" data-note="${d}">＋ メモ</div>`;
       return `<section class="${cls.join(' ')}"><header data-goto="${d}"><b>${esc(fmtDate(d))}</b><span>${items.length ? sumText(dt) : ''}</span><i style="width:${Math.round(dt.kg / dayMax * 100)}%"></i></header>${nt}${body}</section>`;
@@ -347,7 +347,8 @@
   }
 
   function pendingInvoice() {
-    return rows.filter((r) => r.status !== '取消' && !r.paid && !r.invoiced)
+    const t0 = today();
+    return rows.filter((r) => r.status !== '取消' && !r.paid && !r.invoiced && String(r.date) >= t0)
       .sort((a, b) => String(a.date).localeCompare(String(b.date)) || byOrder(a, b));
   }
 

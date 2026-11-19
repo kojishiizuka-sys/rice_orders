@@ -112,7 +112,19 @@
     const areas = (ctx.areas || []).filter((a) => a && a.length >= 2).sort((a, b) => b.length - a.length);
     // お名前：過去のお名前と先頭一致（最長）を優先
     const names = (ctx.names || []).filter(Boolean).sort((a, b) => b.length - a.length);
-    const body = t.trim();
+    let body = t.trim();
+    // 「本郷6丁目の鈴木さん」のように、地域が先に来る言い方：先頭の地域を切り出す
+    let lead = '';
+    {
+      // 先頭の「地域＋の」だけを切り出す（「の」が無い言い方や、お名前を含む場合は触らない）
+      const m = /^([^\s、,，。]{1,10}?)の(?=[^\s、,，。]+)/.exec(body);
+      if (m) {
+        const cand = m[1];
+        const isArea = areas.some((a) => cand === normalize(a) || (cand.startsWith(normalize(a)) && /^(?:\d+丁目|\d+番地?)$/.test(cand.slice(normalize(a).length))))
+          || (!/(?:さん|様|ちゃん|商店|食堂|園)/.test(cand) && /(?:\d+丁目|\d+番地?|[^\d](?:町|区|市|村))$/.test(cand));
+        if (isArea) { lead = cand; body = body.slice(m[0].length).replace(/^[\s、,，。]+/, ''); }
+      }
+    }
     const known = names.find((n) => body.startsWith(normalize(n)));
     let rest;
     if (known) {
@@ -146,6 +158,7 @@
     else if ((r = cutFirst(leftover, /\S*?(?:\d+丁目|\d+番地?|[^\s\d]{1,6}(?:町|区|市|村))\S*/)).hit && !/(?:米|kg|袋)/.test(r.hit)) {
       out.area = r.hit; leftover = r.text;
     }
+    if (lead && !out.area) out.area = lead;
     out.brand = stripEdges(leftover.replace(/\s+/g, ' '));
     out.name = stripEdges(out.name);
     return out;
